@@ -1,0 +1,27 @@
+-- =============================================================================
+-- ENHANCED UNIVERSAL SYN SAVE INSTANCE (USSI) LOADER
+-- =============================================================================
+-- This loader offers two ways to execute your improved saveinstance script:
+--
+-- METHOD 1: Local File (Recommended)
+-- 1. Copy 'saveinstance.luau' into your executor's 'workspace' folder.
+-- 2. Execute the following script in Roblox:
+--
+--    local synsaveinstance = loadstring(readfile("saveinstance.luau"), "saveinstance")()
+--    synsaveinstance({
+--        SafeMode = true,      -- Protects your account
+--        BoostFPS = true,      -- Disables 3D rendering for speed
+--    })
+--
+-- =============================================================================
+-- METHOD 2: Local Web Server (No copying files into workspace required)
+-- 1. Open a terminal in the folder containing 'saveinstance.luau'.
+-- 2. Start a simple web server (e.g. by running: python -m http.server 8000)
+-- 3. Execute the following script in Roblox:
+--
+--    local synsaveinstance = loadstring(game:HttpGet("http://localhost:8000/saveinstance.luau", true), "saveinstance")()
+--    synsaveinstance({
+--        SafeMode = true,
+--        BoostFPS = true,
+--    })
+-- =============================================================================
