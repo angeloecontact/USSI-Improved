@@ -33,15 +33,30 @@ local CONFIG = {
 	Notify    = true,
 }
 
+-- true  = perfil máximo: coge todo lo que se puede coger. Más lento,
+--         archivo mucho más grande y más riesgo de tumbar el cliente.
+-- false = perfil equilibrado, el de siempre.
+local MAX_COVERAGE = false
+
 -- Opciones de saveinstance. Lo que no toques usa el default del script.
 local OPTIONS = {
 	AntiIdle   = true,   -- evita el kick por inactividad en places lentos
 	ShowStatus = true,   -- progreso en consola
+	SafeMode   = true,   -- más lento, menos crashes
 
-	-- SafeMode  = true,                            -- más lento, menos crashes
-	-- Decompile = true,
-	-- FilePath  = "USSI-Improved/mi-place.rbxlx",  -- ruta explícita = sabes dónde quedó
+	-- FilePath = "USSI-Improved/mi-place.rbxlx",  -- ruta explícita = sabes dónde quedó
 }
+
+if MAX_COVERAGE then
+	OPTIONS.mode                       = "full"
+	OPTIONS.NilInstances               = true   -- lo reparentado a nil
+	OPTIONS.SaveNotCreatable           = true
+	OPTIONS.SaveBytecode               = true   -- red de seguridad si falla el decompilador
+	OPTIONS.IgnoreNotArchivable        = false  -- incluye Archivable = false
+	OPTIONS.IgnoreDefaultProperties    = false
+	OPTIONS.IgnoreDefaultPlayerScripts = false
+	OPTIONS.DecompileTimeout           = 30
+end
 
 --============================ UTILIDADES ============================--
 
@@ -329,8 +344,18 @@ local function main()
 		return
 	end
 
+	-- Si map-prefetch.luau corrió antes, hereda lo que recogió del streaming.
+	if OPTIONS.ExtraInstances == nil then
+		local collected = genv.USSI_ExtraInstances
+		if type(collected) == "table" and #collected > 0 then
+			OPTIONS.ExtraInstances = collected
+			log("heredando %d contenedor(es) del prefetch", #collected)
+		end
+	end
+
 	genv.__USSI_RUNNING = true
-	log("guardando… (mode=%s)", tostring(OPTIONS.mode or "default"))
+	log("guardando… (mode=%s, perfil=%s)", tostring(OPTIONS.mode or "default"),
+		MAX_COVERAGE and "máximo" or "equilibrado")
 
 	local startedAt = os.clock()
 	local okRun, result = pcall(saveinstance, OPTIONS)
