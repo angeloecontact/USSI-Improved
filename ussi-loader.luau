@@ -36,7 +36,9 @@ local CONFIG = {
 -- true  = perfil máximo: coge todo lo que se puede coger. Más lento,
 --         archivo mucho más grande y más riesgo de tumbar el cliente.
 -- false = perfil equilibrado, el de siempre.
-local MAX_COVERAGE = false
+-- También se puede forzar desde fuera, sin tocar el archivo:
+--   getgenv().USSI_MAX = true
+local MAX_COVERAGE = (type(getgenv) == "function" and getgenv().USSI_MAX) or false
 
 -- Opciones de saveinstance. Lo que no toques usa el default del script.
 local OPTIONS = {
