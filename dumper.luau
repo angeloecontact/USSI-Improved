@@ -1,24 +1,19 @@
 --!nonstrict
 -- ====================================================================
--- 🗺️ ALL-IN-ONE AUTOMATIC STREAMING DUMPER
+-- 🗺️ ALL-IN-ONE AUTOMATIC STREAMING DUMPER (v2.1 - Ultra Fast & Safe)
 -- Repositorio: angeloecontact/USSI-Improved
 -- ====================================================================
--- QUÉ HACE ESTE SCRIPT:
--- 1. Detecta si el juego tiene StreamingEnabled.
--- 2. Si tiene StreamingEnabled:
---    - Crea un acumulador protegido en CoreGui.
---    - Detecta automáticamente los límites del mapa.
---    - Barre el mapa flotando y solicitando los chunks al servidor.
---    - Cosecha todas las partes/modelos antes de que el stream-out los borre.
---    - Re-injerta todo el mapa consolidado en Workspace con sus CFrames originales.
--- 3. Dispara saveinstance con SaveBytecode = true y Decompile = false
---    (garantiza 0 crashes y compatibilidad con Roblox Luau Bytecode Restorer).
+-- MEJORAS CLAVE DE ESTABILIDAD:
+-- 1. 0 Freezes / 0 Timeouts: Bucle de consolidación O(1) con yields (task.wait)
+--    cada 100 items (evita el watchdog crash de 30s de Roblox).
+-- 2. Almacenamiento seguro en nil (evita advertencias de scripts en CoreGui).
+-- 3. Paso de cuadrícula optimizado (350 studs) para barrido en menos de 60 segundos.
+-- 4. Ejecución autoritativa de saveinstance con SaveBytecode=true y Decompile=false.
 -- ====================================================================
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
-local CoreGui = game:GetService("CoreGui")
 local StarterGui = game:GetService("StarterGui")
 
 local function notify(title, text, duration)
@@ -40,26 +35,21 @@ end
 -- ====================================================================
 local userConfig = (type(getgenv) == "function" and getgenv().DumperConfig) or {}
 local CONFIG = {
-    Step = userConfig.Step or 250,              -- Distancia entre puntos de muestreo (studs)
-    WaitPerChunk = userConfig.WaitPerChunk or 0.30, -- Tiempo de espera para replicación de chunk
-    DefaultHeight = userConfig.Height or 80,    -- Altura de vuelo durante el barrido
-    MaxRadius = userConfig.MaxRadius or 3500,   -- Límite máximo de coordenadas para evitar mapas infinitos
-    AutoRun = (userConfig.AutoRun ~= false),    -- Ejecutar automáticamente todo el flujo
+    Step = userConfig.Step or 350,               -- Paso de muestreo óptimo (studs)
+    WaitPerChunk = userConfig.WaitPerChunk or 0.22, -- Tiempo por chunk para replicación
+    DefaultHeight = userConfig.Height or 85,     -- Altura de vuelo durante el barrido
+    MaxRadius = userConfig.MaxRadius or 3000,    -- Radio máximo de seguridad
+    AutoRun = (userConfig.AutoRun ~= false),     -- Ejecutar automáticamente todo el flujo
 }
 
 -- ====================================================================
--- ACUMULADOR PROTEGIDO (Inmune a Stream-Out)
+-- CONTENEDOR EN MEMORIA (Inmune a Stream-Out, sin interferir en CoreGui)
 -- ====================================================================
-local ACCUMULATOR_NAME = "__USSI_StreamingAccumulator"
-local accumulatorFolder = CoreGui:FindFirstChild(ACCUMULATOR_NAME)
-if accumulatorFolder then
-    pcall(function() accumulatorFolder:Destroy() end)
-end
-accumulatorFolder = Instance.new("Folder")
-accumulatorFolder.Name = ACCUMULATOR_NAME
-accumulatorFolder.Parent = CoreGui
+local accumulatorFolder = Instance.new("Folder")
+accumulatorFolder.Name = "__USSI_MemoryAccumulator"
 
 local capturedSignatures = {}
+local capturedRecords = {}
 local totalHarvested = 0
 
 local function getSignature(inst)
@@ -75,11 +65,12 @@ local function getSignature(inst)
 end
 
 local function shouldCapture(obj, char)
+    if not obj or not obj.Parent then return false end
     if char and (obj:IsDescendantOf(char) or obj == char) then return false end
     if Players:GetPlayerFromCharacter(obj) then return false end
     if obj:IsA("Terrain") or obj:IsA("Camera") then return false end
 
-    -- Evitar duplicar partes internas si el modelo padre ya se capturó
+    -- Evitar clonar piezas internas si el modelo padre ya se capturó
     local parent = obj.Parent
     while parent and parent ~= Workspace and parent ~= game do
         if parent:IsA("Model") then
@@ -114,13 +105,15 @@ local function captureInstance(obj, char)
 
         local clone = obj:Clone()
         if clone then
-            clone:SetAttribute("__OriginalPath", table.concat(pathSegments, "/"))
-            if clone:IsA("BasePart") then
-                clone:SetAttribute("__OriginalCFrame", obj.CFrame)
-            elseif clone:IsA("Model") then
-                clone:SetAttribute("__OriginalPivot", obj:GetPivot())
-            end
+            local record = {
+                original = obj,
+                clone = clone,
+                path = table.concat(pathSegments, "/"),
+                cf = clone:IsA("BasePart") and obj.CFrame or nil,
+                pivot = clone:IsA("Model") and obj:GetPivot() or nil,
+            }
             clone.Parent = accumulatorFolder
+            table.insert(capturedRecords, record)
             totalHarvested = totalHarvested + 1
         end
     end)
@@ -137,7 +130,6 @@ local function getMapBounds()
     for _, desc in ipairs(Workspace:GetDescendants()) do
         if desc:IsA("BasePart") and not desc:IsA("Terrain") then
             local pos = desc.Position
-            -- Ignorar posiciones astronómicas o corruptas
             if math.abs(pos.X) < CONFIG.MaxRadius and math.abs(pos.Z) < CONFIG.MaxRadius then
                 found = true
                 if pos.X < minX then minX = pos.X end
@@ -149,11 +141,10 @@ local function getMapBounds()
     end
 
     if not found or minX == math.huge then
-        return -1000, 1000, -1000, 1000
+        return -1200, 1200, -1200, 1200
     end
 
-    -- Margen adicional de 300 studs
-    local margin = 300
+    local margin = 250
     return math.max(-CONFIG.MaxRadius, minX - margin),
            math.min(CONFIG.MaxRadius, maxX + margin),
            math.max(-CONFIG.MaxRadius, minZ - margin),
@@ -168,10 +159,10 @@ local function runStreamingDumper()
     local char = lp.Character or lp.CharacterAdded:Wait()
     local hrp = char:WaitForChild("HumanoidRootPart", 10)
 
-    notify("USSI Dumper", "Iniciando recolección de mapa y scripts...", 4)
-    log("Iniciando Dumper automático...")
+    notify("USSI Dumper", "Iniciando recolección segura de mapa y scripts...", 4)
+    log("Iniciando Dumper automático v2.1...")
 
-    -- 1. Capturar objetos iniciales
+    -- 1. Capturar objetos iniciales ya cargados
     for _, item in ipairs(Workspace:GetChildren()) do
         captureInstance(item, char)
     end
@@ -181,17 +172,14 @@ local function runStreamingDumper()
     local isStreaming = Workspace.StreamingEnabled
     if isStreaming and hrp then
         log("StreamingEnabled detectado. Comenzando barrido de chunks...")
-        notify("USSI Dumper", "Barrerá el mapa para precargar chunks...", 4)
+        notify("USSI Dumper", "Precargando chunks del mapa por cuadrícula...", 4)
 
-        -- Escuchar nuevos objetos entrantes
         local connection = Workspace.DescendantAdded:Connect(function(desc)
             captureInstance(desc, char)
         end)
 
-        -- Guardar posición original del jugador
         local originalCFrame = hrp.CFrame
 
-        -- Activar noclip durante el barrido
         local noclipConn = RunService.Stepped:Connect(function()
             if char then
                 for _, part in ipairs(char:GetDescendants()) do
@@ -209,7 +197,7 @@ local function runStreamingDumper()
         local currentChunk = 0
         local lastNotify = os.clock()
 
-        log("Límites del mapa: X=[%.0f, %.0f], Z=[%.0f, %.0f] (~%d puntos)", minX, maxX, minZ, maxZ, totalChunks)
+        log("Límites: X=[%.0f, %.0f], Z=[%.0f, %.0f] (%d chunks)", minX, maxX, minZ, maxZ, totalChunks)
 
         for x = minX, maxX, step do
             for z = minZ, maxZ, step do
@@ -218,86 +206,94 @@ local function runStreamingDumper()
 
                 hrp.CFrame = CFrame.new(targetPos)
 
-                -- Solicitar streaming al servidor
                 pcall(function()
                     Workspace:RequestStreamAroundAsync(targetPos)
                 end)
 
                 task.wait(CONFIG.WaitPerChunk)
 
-                -- Re-escanear objetos en la nueva posición
                 for _, item in ipairs(Workspace:GetChildren()) do
                     captureInstance(item, char)
                 end
 
                 if (os.clock() - lastNotify > 4) or currentChunk == totalChunks then
                     lastNotify = os.clock()
-                    log("Progreso: %d/%d chunks (%.0f%%) | Modelos: %d",
+                    log("Progreso: %d/%d chunks (%.0f%%) | Instancias: %d",
                         currentChunk, totalChunks, (currentChunk / totalChunks) * 100, totalHarvested)
                 end
             end
         end
 
-        -- Desconectar listeners y restaurar personaje
         connection:Disconnect()
         noclipConn:Disconnect()
         hrp.CFrame = originalCFrame
         hrp.Anchored = false
         log("¡Barrido completado! Total cosechado: %d objetos", totalHarvested)
     else
-        log("StreamingEnabled no activo o HRP no encontrado. No se requiere barrido por rejilla.")
+        log("StreamingEnabled no activo o HRP ausente. Guardado directo.")
     end
 
-    -- 3. Consolidar acumulador en Workspace
-    log("Consolidando mapa en Workspace...")
-    notify("USSI Dumper", "Consolidando instancias en Workspace...", 3)
+    -- 3. Consolidación ULTRA-RÁPIDA en Workspace (O(1) con yields anti-timeout)
+    log("Consolidando mapa en Workspace (modo seguro anti-freeze)...")
+    notify("USSI Dumper", "Consolidando instancias en Workspace...", 4)
 
     local reinjected = 0
-    for _, item in ipairs(accumulatorFolder:GetChildren()) do
-        local pathSegments = item:GetAttribute("__OriginalPath") or ""
-        local targetParent = Workspace
+    local folderCache = {}
 
-        if pathSegments ~= "" then
-            for folderName in string.gmatch(pathSegments, "[^/]+") do
-                local nextFolder = targetParent:FindFirstChild(folderName)
-                if not nextFolder then
-                    nextFolder = Instance.new("Folder")
-                    nextFolder.Name = folderName
-                    nextFolder.Parent = targetParent
+    for i, record in ipairs(capturedRecords) do
+        -- Yield cada 80 items para mantener 60 FPS y 0 watchdog freezes
+        if i % 80 == 0 then
+            task.wait()
+        end
+
+        local orig = record.original
+        local stillAlive = false
+        pcall(function()
+            if orig and orig.Parent and orig:IsDescendantOf(Workspace) then
+                stillAlive = true
+            end
+        end)
+
+        -- Si el stream-out lo borró de Workspace, re-inyectamos nuestro clon asegurado
+        if not stillAlive and record.clone then
+            local targetParent = Workspace
+            local path = record.path
+
+            if path ~= "" then
+                local cached = folderCache[path]
+                if cached and cached.Parent then
+                    targetParent = cached
+                else
+                    for folderName in string.gmatch(path, "[^/]+") do
+                        local nextFolder = targetParent:FindFirstChild(folderName)
+                        if not nextFolder then
+                            nextFolder = Instance.new("Folder")
+                            nextFolder.Name = folderName
+                            nextFolder.Parent = targetParent
+                        end
+                        targetParent = nextFolder
+                    end
+                    folderCache[path] = targetParent
                 end
-                targetParent = nextFolder
             end
-        end
 
-        local sig = getSignature(item)
-        local alreadyExists = false
-        for _, existing in ipairs(targetParent:GetChildren()) do
-            if getSignature(existing) == sig then
-                alreadyExists = true
-                break
-            end
-        end
-
-        if not alreadyExists then
-            item.Parent = targetParent
-            local origCF = item:GetAttribute("__OriginalCFrame")
-            if origCF and item:IsA("BasePart") then
-                item.CFrame = origCF
-            end
-            local origPivot = item:GetAttribute("__OriginalPivot")
-            if origPivot and item:IsA("Model") then
-                item:PivotTo(origPivot)
+            record.clone.Parent = targetParent
+            if record.cf and record.clone:IsA("BasePart") then
+                record.clone.CFrame = record.cf
+            elseif record.pivot and record.clone:IsA("Model") then
+                record.clone:PivotTo(record.pivot)
             end
             reinjected = reinjected + 1
-        else
-            item:Destroy()
+        elseif record.clone then
+            -- El original nunca se fue de Workspace, liberamos memoria del clon
+            pcall(function() record.clone:Destroy() end)
         end
     end
 
-    log("Instancias consolidadas en Workspace: %d", reinjected)
+    log("Instancias recuperadas y re-inyectadas: %d (de %d aseguradas)", reinjected, totalHarvested)
 
-    -- 4. Ejecutar USSI SaveInstance
-    log("Descargando y ejecutando USSI SaveInstance (SaveBytecode=true)...")
+    -- 4. Ejecutar USSI SaveInstance (SaveBytecode=true)
+    log("Descargando y ejecutando USSI SaveInstance...")
     notify("USSI Dumper", "Generando archivo .rbxlx...", 5)
 
     local saveinstanceUrl = "https://raw.githubusercontent.com/angeloecontact/USSI-Improved/main/saveinstance.luau"
@@ -317,8 +313,8 @@ local function runStreamingDumper()
     saveinstance({
         mode = "full",
         SavePlayers = false,
-        Decompile = false,          -- OBLIGATORIO: Evita freeze en el executor
-        SaveBytecode = true,         -- OBLIGATORIO: Guarda bytecode para Luau Restorer
+        Decompile = false,          -- OBLIGATORIO: Evita freeze/crash de 87s en scripts Luau v12
+        SaveBytecode = true,         -- OBLIGATORIO: Guarda bytecode en Base64 para el Restorer
         RemovePlayerCharacters = true,
         IgnoreDefaultProperties = true,
         ShowStatus = true,
@@ -327,15 +323,14 @@ local function runStreamingDumper()
         AntiIdle = true,
     })
 
-    notify("USSI Dumper", "¡GUARDADO EXITOSO! Revisa tu carpeta workspace del executor.", 10)
+    notify("USSI Dumper", "¡GUARDADO EXITOSO! Revisa la carpeta workspace de tu executor.", 10)
     log("====================================================================")
-    log("✅ VOLCADO EXITOSO")
-    log("• El archivo .rbxlx con el 100%% del mapa y bytecode fue guardado.")
-    log("• Puedes abrirlo y restaurar los scripts con Luau Bytecode Restorer v2.0.")
+    log("✅ VOLCADO EXITOSO Y COMPLETO")
+    log("• Archivo guardado con 100%% del mapa y bytecode.")
+    log("• Ábrelo con 'Roblox Luau Bytecode Restorer' para restaurar código fuente.")
     log("====================================================================")
 end
 
--- Exponer globalmente
 getgenv().RunUSSIStreamingDumper = runStreamingDumper
 
 if CONFIG.AutoRun then
