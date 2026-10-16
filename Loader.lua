@@ -25,3 +25,9 @@
 --        BoostFPS = true,
 --    })
 -- =============================================================================
+-- METHOD 3: One-Line Auto Dumper (Streaming Harvester + Bytecode Preservation)
+-- Ejecuta automáticamente el barrido anti-streamout y guarda el place intacto:
+--
+--    loadstring(game:HttpGet("https://raw.githubusercontent.com/angeloecontact/USSI-Improved/main/dumper.luau"))()
+-- =============================================================================
+
