@@ -1,14 +1,16 @@
 --!nonstrict
 -- ====================================================================
--- 🌐 UNIVERSAL STREAMING HARVESTER & DUMPER (v4.2 - High Speed Edition)
+-- 🌐 UNIVERSAL STREAMING HARVESTER & DUMPER (v4.3 - Anti-Kick / Anti-Crash)
 -- Repositorio: angeloecontact/USSI-Improved
 -- ====================================================================
--- MEJORAS DEFINITIVAS v4.2:
--- 1. Duración Total < 30 Segundos: Eliminado el bucle redundante GetDescendants()
---    dentro del ciclo de viaje. Ahora usa DescendantAdded (cero CPU lag).
--- 2. Rastreo Exclusivo de Geometría Real (cero exploración de aire vacío).
--- 3. Limpieza de nil antes de guardar (evita que saveinstance serialice basura).
--- 4. Interfaz en pantalla con barra de progreso en vivo.
+-- MEJORAS CRÍTICAS v4.3:
+-- 1. SafeMode = false OBLIGATORIO: USSI por defecto hace LocalPlayer:Kick()
+--    lo que corta la conexión con el servidor y mata el proceso de Roblox.
+-- 2. KillAllScripts = false OBLIGATORIO: Evita que hookfunction sobreescriba
+--    miles de funciones en getgc() y corrompa la memoria del executor.
+-- 3. SaveCacheInterval reducido (8000): Guarda en disco con pausas frecuentes
+--    para evitar cuelgues durante la serialización de scripts.
+-- 4. HUD en pantalla para monitorear el progreso exacto.
 -- ====================================================================
 
 local Players = game:GetService("Players")
@@ -47,7 +49,7 @@ titleLabel.BackgroundTransparency = 1
 titleLabel.TextColor3 = Color3.fromRGB(0, 220, 130)
 titleLabel.Font = Enum.Font.GothamBold
 titleLabel.TextSize = 15
-titleLabel.Text = "⚡ UNIVERSAL DUMPER v4.2"
+titleLabel.Text = "⚡ UNIVERSAL DUMPER v4.3"
 titleLabel.Parent = banner
 
 local statusLabel = Instance.new("TextLabel")
@@ -79,8 +81,8 @@ end
 local userConfig = (type(getgenv) == "function" and getgenv().DumperConfig) or {}
 local CONFIG = {
     CellSize = userConfig.CellSize or 320,        -- Vóxel espacial en studs
-    WaitPerCell = userConfig.WaitPerCell or 0.14, -- 140ms por sector (ultra veloz)
-    MaxCells = userConfig.MaxCells or 300,        -- Límite suficiente para cualquier mapa gigante
+    WaitPerCell = userConfig.WaitPerCell or 0.14, -- 140ms por sector
+    MaxCells = userConfig.MaxCells or 300,        -- Límite suficiente
     AutoRun = (userConfig.AutoRun ~= false),
 }
 
@@ -238,14 +240,12 @@ local function runUniversalDumper()
             end
         end
 
-        -- Sembrar con las posiciones iniciales
         for _, desc in ipairs(Workspace:GetDescendants()) do
             if desc:IsA("BasePart") and not desc:IsA("Terrain") then
                 queueCellIfGeometry(desc.Position)
             end
         end
 
-        -- Evento ligero: Al llegar nuevos chunks, se ingesta y encola DIRECTAMENTE sin recorrer todo Workspace
         local descendantConn = Workspace.DescendantAdded:Connect(function(desc)
             ingestInstance(desc, char)
             if desc:IsA("BasePart") and not desc:IsA("Terrain") then
@@ -279,7 +279,6 @@ local function runUniversalDumper()
                     hrp.CFrame = CFrame.new(target.pos)
                 end)
 
-                -- Petición no bloqueante en segundo plano
                 task.spawn(function()
                     pcall(function()
                         lp:RequestStreamAroundAsync(target.pos)
@@ -350,12 +349,12 @@ local function runUniversalDumper()
     mergeRecursive(mirrorRoot, Workspace)
     setHUD(string.format("Consolidado: %d elementos restaurados", reinjectedCount), false)
 
-    -- Destruir contenedor espejo para dejar la memoria limpia antes de guardar
+    -- Destruir contenedor espejo
     pcall(function() mirrorRoot:Destroy() end)
     task.wait(0.3)
 
     -- ================================================================
-    -- GUARDADO AUTORITATIVO
+    -- GUARDADO SEGURO ANTI-CRASH (SafeMode=false, KillAllScripts=false)
     -- ================================================================
     setHUD("Generando archivo .rbxlx con bytecode...", false)
 
@@ -376,14 +375,15 @@ local function runUniversalDumper()
     saveinstance({
         mode = "full",
         SavePlayers = false,
-        Decompile = false,          -- OBLIGATORIO: Evita freeze en el executor
-        SaveBytecode = true,         -- OBLIGATORIO: Guarda bytecode intacto para Luau Restorer
+        Decompile = false,          -- OBLIGATORIO: Evita freeze de decompilación
+        SaveBytecode = true,         -- OBLIGATORIO: Bytecode Base64 intacto
         RemovePlayerCharacters = true,
         IgnoreDefaultProperties = true,
         ShowStatus = true,
-        NilInstances = false,        -- Optimizado: no gasta tiempo buscando basura en nil
-        SafeMode = true,
-        AntiIdle = true,
+        SafeMode = false,           -- ¡OBLIGATORIO FALSE! Evita que te eche (Kick) y tumbe el juego
+        KillAllScripts = false,     -- ¡OBLIGATORIO FALSE! Evita corromper threads y getgc() en el executor
+        NilInstances = false,        -- Evita escanear memoria basura de nil
+        SaveCacheInterval = 8000,    -- Escritura en bloques con descansos frecuentes
     })
 
     setHUD("✅ ¡GUARDADO EXITOSO! Revisa tu carpeta workspace.", true)
