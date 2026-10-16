@@ -142,10 +142,14 @@ local function makeArchivable(inst)
     end
 end
 
-local function ingestInstance(inst, char)
+local function ingestInstance(inst)
     if not inst or not inst.Parent then return end
-    if char and (inst:IsDescendantOf(char) or inst == char) then return end
-    if Players:GetPlayerFromCharacter(inst) then return end
+    
+    -- Ignorar personajes de cualquier jugador en el servidor
+    for _, p in ipairs(Players:GetPlayers()) do
+        local pChar = p.Character
+        if pChar and (inst == pChar or inst:IsDescendantOf(pChar)) then return end
+    end
     if inst:IsA("Terrain") or inst:IsA("Camera") then return end
 
     if mirroredInstances[inst] then return end
@@ -250,30 +254,43 @@ end
 
 local function runUniversalDumper()
     local char = lp.Character or lp.CharacterAdded:Wait()
-    local hrp = char:WaitForChild("HumanoidRootPart", 10)
+    local function getActiveHRP()
+        if hrp and hrp.Parent and hrp.Parent.Parent then return hrp end
+        local c = lp.Character
+        if c then
+            local root = c:FindFirstChild("HumanoidRootPart")
+            if root then
+                hrp = root
+                return hrp
+            end
+        end
+        return nil
+    end
 
     setHUD("Escaneando geometria inicial...", false)
 
     -- Ingesta inicial
     for _, desc in ipairs(Workspace:GetDescendants()) do
-        ingestInstance(desc, char)
+        ingestInstance(desc)
     end
     setHUD(string.format("Inicial: %d piezas aseguradas", totalMirroredParts), false)
 
     local isStreaming = Workspace.StreamingEnabled
-    if isStreaming and hrp then
-        local originalCFrame = hrp.CFrame
+    local activeHRP = getActiveHRP()
+    if isStreaming and activeHRP then
+        local originalCFrame = activeHRP.CFrame
 
         local noclipConn = RunService.Stepped:Connect(function()
-            if char then
-                for _, part in ipairs(char:GetDescendants()) do
+            local c = lp.Character
+            if c then
+                for _, part in ipairs(c:GetDescendants()) do
                     if part:IsA("BasePart") then
                         part.CanCollide = false
                     end
                 end
             end
         end)
-        hrp.Anchored = true
+        pcall(function() activeHRP.Anchored = true end)
 
         local visitedCells = {}
         local queuedCells = {}
@@ -299,7 +316,7 @@ local function runUniversalDumper()
 
         local descendantConn = Workspace.DescendantAdded:Connect(function(desc)
             lastStreamedTime = os.clock()
-            ingestInstance(desc, char)
+            ingestInstance(desc)
             if desc:IsA("BasePart") and not desc:IsA("Terrain") then
                 queueCellIfGeometry(desc.Position)
             end
@@ -309,7 +326,8 @@ local function runUniversalDumper()
         local lastLog = os.clock()
 
         while #queue > 0 and visitedCount < CONFIG.MaxCells do
-            local currentPos = hrp.Position
+            local currentHRP = getActiveHRP()
+            local currentPos = (currentHRP and currentHRP.Position) or Vector3.zero
             local bestIdx = 1
             local bestDist = math.huge
 
@@ -328,7 +346,11 @@ local function runUniversalDumper()
                 visitedCount = visitedCount + 1
 
                 pcall(function()
-                    hrp.CFrame = CFrame.new(target.pos)
+                    local curRoot = getActiveHRP()
+                    if curRoot then
+                        curRoot.CFrame = CFrame.new(target.pos)
+                        curRoot.Anchored = true
+                    end
                 end)
 
                 -- Solicitar streaming del sector
@@ -358,8 +380,11 @@ local function runUniversalDumper()
         descendantConn:Disconnect()
         noclipConn:Disconnect()
         pcall(function()
-            hrp.CFrame = originalCFrame
-            hrp.Anchored = false
+            local finalHRP = getActiveHRP()
+            if finalHRP then
+                finalHRP.CFrame = originalCFrame
+                finalHRP.Anchored = false
+            end
         end)
         setHUD(string.format("Barrido completado: %d piezas capturadas", totalMirroredParts), false)
     end
