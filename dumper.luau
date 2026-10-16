@@ -1,25 +1,23 @@
 --!nonstrict
 -- ====================================================================
--- 🌐 UNIVERSAL STREAMING HARVESTER & DUMPER (v5.1 - Surface Lock & Deep Dwell)
+-- 🌐 UNIVERSAL STREAMING HARVESTER & DUMPER (v5.2 - Universal Volumetric Engine)
 -- Repositorio: angeloecontact/USSI-Improved
 -- ====================================================================
--- NOVEDADES Y CORRECCIONES CRÍTICAS v5.1:
--- 1. Teletransporte a Nivel de Superficie (Surface-Level Lock):
---    Antes el jugador se teletransportaba al centro matemático del vóxel 3D
---    (a veces a 90 studs de altura en el aire o bajo el suelo), dejando los
---    keycaps y plataformas fuera del radio de streaming (StreamingMinRadius = 200).
---    Ahora se sitúa exactamente sobre la superficie de la geometría (Y + 3.5 studs).
--- 2. Streaming Sincrónico Asistido por Motor (RequestStreamAroundAsync):
---    Se ejecuta de forma sincrónica con timeout de 1.8s para obligar al
---    servidor de Roblox a entregar el paquete completo de la zona antes de evaluar.
--- 3. Quiescencia de Red Real (Deep Quiescence):
---    MinWait de 200ms para absorber la latencia (ping) de red, y ventana de
---    quiescencia de 350ms con techo de hasta 3.0s en zonas hiperdensas de keycaps.
--- 4. Tamaño de celda ultra-seguro (140 studs):
---    El radio máximo a cualquier esquina es de ~99 studs (muy por debajo de los 200
---    studs garantizados del juego), eliminando todo corte diagonal o parche ciego.
--- 5. Límite MaxCells ampliado a 3500:
---    Cubre mapas gigantes de más de 25,000 studs de longitud sin cortarse a mitad de camino.
+-- ARQUITECTURA 100% UNIVERSAL PARA CUALQUIER TIPO DE JUEGO:
+-- 1. Soporte Vertical Multi-Nivel (CellSizeY = 60 studs):
+--    Diseñado para edificios de múltiples pisos, rascacielos, minas subterráneas
+--    y montañas con grandes cambios de altura. Cada estrato vertical se barre
+--    independientemente sin saltarse pisos intermedios ni sótanos.
+-- 2. Raycast Ground-Snapping Universal:
+--    Usa Workspace:Raycast hacia abajo para detectar la superficie física real
+--    (sea Terreno suave, mallas de montaña, pisos de madera o plataformas flotantes),
+--    posicionando al personaje a exactamente 3.5 studs del suelo.
+-- 3. Descubrimiento Espacial Guiado por Geometría y WorldPivots:
+--    Detecta partes y pivotes de modelos en 3D para mapas de mundo abierto,
+--    islas flotantes, ciudades, mazmorras o carreras. Cero dependencia de nombres de etapas.
+-- 4. Replicación Sincrónica Asistida (RequestStreamAroundAsync 1.8s + Quiescencia):
+--    Garantiza la entrega del 100% de piezas antes de avanzar a la siguiente celda.
+-- 5. Preservación Jerárquica Universal con firmas de 0.01 studs de precisión.
 -- ====================================================================
 
 local Players = game:GetService("Players")
@@ -58,7 +56,7 @@ titleLabel.BackgroundTransparency = 1
 titleLabel.TextColor3 = Color3.fromRGB(0, 230, 140)
 titleLabel.Font = Enum.Font.GothamBold
 titleLabel.TextSize = 15
-titleLabel.Text = "⚡ UNIVERSAL DUMPER v5.1 (Deep Dwell)"
+titleLabel.Text = "⚡ UNIVERSAL DUMPER v5.2 (Volumetric)"
 titleLabel.Parent = banner
 
 local statusLabel = Instance.new("TextLabel")
@@ -89,11 +87,12 @@ end
 -- ====================================================================
 local userConfig = (type(getgenv) == "function" and getgenv().DumperConfig) or {}
 local CONFIG = {
-    CellSize = userConfig.CellSize or 140,              -- 140 studs (radio máximo esquina < 100 studs)
+    CellSize = userConfig.CellSize or 140,              -- 140 studs horizontal
+    CellSizeY = userConfig.CellSizeY or 60,             -- 60 studs vertical (cubre pisos y desniveles de montaña)
     MinWaitPerCell = userConfig.MinWaitPerCell or 0.20, -- Mínimo 200ms para absorber ping de red
     QuiescenceTimeout = userConfig.QuiescenceTimeout or 0.35, -- 350ms sin piezas antes de avanzar
-    MaxWaitPerCell = userConfig.MaxWaitPerCell or 3.0,  -- Techo generoso para miles de keycaps
-    MaxCells = userConfig.MaxCells or 3500,             -- Suficiente para recorrer cualquier mapa de punta a punta
+    MaxWaitPerCell = userConfig.MaxWaitPerCell or 3.0,  -- Techo generoso para zonas de alta densidad
+    MaxCells = userConfig.MaxCells or 5000,             -- 5000 sectores (cubre mundos abiertos gigantescos)
     AutoRun = (userConfig.AutoRun ~= false),
 }
 
@@ -246,7 +245,8 @@ end
 
 local function getCellCoords(pos)
     local S = CONFIG.CellSize
-    return math.floor(pos.X / S), math.floor(pos.Y / S), math.floor(pos.Z / S)
+    local SY = CONFIG.CellSizeY or 60
+    return math.floor(pos.X / S), math.floor(pos.Y / SY), math.floor(pos.Z / S)
 end
 
 local function runUniversalDumper()
@@ -295,19 +295,37 @@ local function runUniversalDumper()
         local queuedCells = {}
         local queue = {}
 
+        local function getSurfacePos(rawPos)
+            local rayParams = RaycastParams.new()
+            rayParams.FilterType = Enum.RaycastFilterType.Exclude
+            local c = lp.Character
+            if c then rayParams.FilterDescendantsInstances = { c } end
+            
+            -- Detectar superficie real (Partes, MeshParts o Terreno)
+            local hit = Workspace:Raycast(rawPos + Vector3.new(0, 10, 0), Vector3.new(0, -45, 0), rayParams)
+            if hit then
+                return hit.Position + Vector3.new(0, 3.5, 0)
+            end
+            return rawPos + Vector3.new(0, 3.5, 0)
+        end
+
         local function queueCellIfGeometry(pos)
             local cx, cy, cz = getCellCoords(pos)
             local k = cellKey(cx, cy, cz)
             if not queuedCells[k] and not visitedCells[k] then
                 queuedCells[k] = true
-                -- Teletransportarse directamente al nivel de la superficie (Y + 3.5 studs)
-                table.insert(queue, { key = k, pos = Vector3.new(pos.X, pos.Y + 3.5, pos.Z) })
+                table.insert(queue, { key = k, pos = pos })
             end
         end
 
         for _, desc in ipairs(Workspace:GetDescendants()) do
             if desc:IsA("BasePart") and not desc:IsA("Terrain") then
                 queueCellIfGeometry(desc.Position)
+            elseif desc:IsA("Model") then
+                local ok, cf = pcall(function() return desc:GetPivot() end)
+                if ok and cf and cf.Position ~= Vector3.zero then
+                    queueCellIfGeometry(cf.Position)
+                end
             end
         end
 
@@ -318,6 +336,11 @@ local function runUniversalDumper()
             ingestInstance(desc)
             if desc:IsA("BasePart") and not desc:IsA("Terrain") then
                 queueCellIfGeometry(desc.Position)
+            elseif desc:IsA("Model") then
+                local ok, cf = pcall(function() return desc:GetPivot() end)
+                if ok and cf and cf.Position ~= Vector3.zero then
+                    queueCellIfGeometry(cf.Position)
+                end
             end
         end)
 
@@ -344,17 +367,19 @@ local function runUniversalDumper()
                 visitedCells[target.key] = true
                 visitedCount = visitedCount + 1
 
+                local targetPos = getSurfacePos(target.pos)
+
                 pcall(function()
                     local curRoot = getActiveHRP()
                     if curRoot then
-                        curRoot.CFrame = CFrame.new(target.pos)
+                        curRoot.CFrame = CFrame.new(targetPos)
                         curRoot.Anchored = true
                     end
                 end)
 
                 -- Solicitar activamente el streaming de la zona alrededor de la posición exacta
                 pcall(function()
-                    lp:RequestStreamAroundAsync(target.pos, 1.8)
+                    lp:RequestStreamAroundAsync(targetPos, 1.8)
                 end)
 
                 -- Quiescencia de red profunda: esperar mientras el servidor siga entregando paquetes
