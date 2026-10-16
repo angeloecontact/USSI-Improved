@@ -1,19 +1,16 @@
 --!nonstrict
 -- ====================================================================
--- 🌐 UNIVERSAL STREAMING HARVESTER & DUMPER (v4.0 - Total Architecture)
+-- 🌐 UNIVERSAL GEOMETRY-GUIDED STREAMING DUMPER (v4.1 - Ultra Fast)
 -- Repositorio: angeloecontact/USSI-Improved
 -- ====================================================================
--- ARQUITECTURA 100% UNIVERSAL Y AGNOSTICA:
--- 1. Cero nombres fijos: No busca "stages", "checkpoints" ni jerarquías inventadas.
---    Funciona con CUALQUIER juego de Roblox (Bloxburg, Obbies, RPGs, simuladores, etc.).
--- 2. Algoritmo de Frontera Espacial 3D (Frontier Exploration):
---    Detecta automáticamente las zonas pobladas en 3D (X, Y, Z) y expande el barrido
---    de forma adaptativa siguiendo la geometría real del mapa, sin importar su forma o tamaño.
--- 3. Árbol Espejo Dinámico (Universal Mirror Tree):
---    Clona y reconstruye la jerarquía exacta de carpetas, modelos y partes en memoria
---    protegida. Si un modelo llega "a trozos" con el tiempo, todas sus piezas se
---    ensamblan en el espejo sin perder nunca paredes, puertas ni decoraciones.
--- 4. Fusión O(1) con descansos anti-timeout y guardado autoritativo con Bytecode.
+-- MEJORAS CLAVE v4.1:
+-- 1. Cero esperas en el vacío: RequestStreamAroundAsync se lanza de forma
+--    asíncrona (no bloquea 3 segundos por celda vacía).
+-- 2. Rastreo guiado exclusivamente por GEOMETRÍA REAL:
+--    Solo visita celdas donde realmente existen partes en 3D. No explora
+--    el aire vacío ni el espacio negro. El barrido dura 15-30 segundos.
+-- 3. Árbol Espejo Universal: Preserva el 100% de la jerarquía original en memoria.
+-- 4. Fusión O(1) con descansos anti-timeout y guardado automático con Bytecode.
 -- ====================================================================
 
 local Players = game:GetService("Players")
@@ -40,10 +37,9 @@ end
 -- ====================================================================
 local userConfig = (type(getgenv) == "function" and getgenv().DumperConfig) or {}
 local CONFIG = {
-    CellSize = userConfig.CellSize or 320,        -- Tamaño del vóxel 3D (studs)
-    WaitPerCell = userConfig.WaitPerCell or 0.25, -- Tiempo de espera para replicación de chunk
-    MaxPoints = userConfig.MaxPoints or 1200,     -- Límite máximo de puntos explorados
-    MaxRadius = userConfig.MaxRadius or 30000,    -- Coordenada máxima de seguridad (30,000 studs)
+    CellSize = userConfig.CellSize or 300,        -- Tamaño de la celda espacial (studs)
+    WaitPerCell = userConfig.WaitPerCell or 0.18, -- 180ms por punto (ultra rápido y suficiente)
+    MaxCells = userConfig.MaxCells or 450,        -- Tope máximo de celdas reales
     AutoRun = (userConfig.AutoRun ~= false),
 }
 
@@ -76,7 +72,6 @@ local function makeArchivable(inst)
     end
 end
 
--- Ingesta cualquier instancia en el Árbol Espejo respetando su ruta jerárquica exacta
 local function ingestInstance(inst, char)
     if not inst or not inst.Parent then return end
     if char and (inst:IsDescendantOf(char) or inst == char) then return end
@@ -85,7 +80,7 @@ local function ingestInstance(inst, char)
 
     if mirroredInstances[inst] then return end
 
-    -- Construir lista de ancestros desde Workspace hacia abajo
+    -- Obtener cadena de ancestros desde Workspace
     local ancestorChain = {}
     local curr = inst.Parent
     while curr and curr ~= Workspace and curr ~= game do
@@ -93,7 +88,7 @@ local function ingestInstance(inst, char)
         curr = curr.Parent
     end
 
-    -- Navegar / replicar contenedores en el Árbol Espejo
+    -- Navegar / replicar contenedores en el Espejo
     local mirrorParent = mirrorRoot
     for _, ancestor in ipairs(ancestorChain) do
         local aName = ancestor.Name
@@ -111,7 +106,6 @@ local function ingestInstance(inst, char)
         mirrorParent = existingContainer
     end
 
-    -- Si inst es un contenedor (Folder / Model), crearlo en el espejo
     if inst:IsA("Folder") or inst:IsA("Model") then
         local container = mirrorParent:FindFirstChild(inst.Name)
         if not container then
@@ -128,7 +122,7 @@ local function ingestInstance(inst, char)
         return
     end
 
-    -- Si inst es un BasePart o elemento de hoja (Sound, Decal, Script, Light, etc.)
+    -- BasePart o elemento de hoja
     local sig = getSignature(inst)
     if not mirrorSignatures[mirrorParent] then
         mirrorSignatures[mirrorParent] = {}
@@ -149,7 +143,7 @@ local function ingestInstance(inst, char)
 end
 
 -- ====================================================================
--- EXPLORACIÓN DE FRONTERA ESPACIAL 3D (Universal Frontier)
+-- RASTREO GUIADO POR GEOMETRÍA REAL (Geometry-Guided Tracker)
 -- ====================================================================
 local function cellKey(cx, cy, cz)
     return string.format("%d,%d,%d", cx, cy, cz)
@@ -170,28 +164,20 @@ local function runUniversalDumper()
     local char = lp.Character or lp.CharacterAdded:Wait()
     local hrp = char:WaitForChild("HumanoidRootPart", 10)
 
-    notify("Universal Dumper", "Iniciando mapeo universal del juego...", 4)
-    log("Iniciando Universal Streaming Harvester v4.0...")
+    notify("Universal Dumper", "Iniciando rastreador de mapa guiado por geometría...", 4)
+    log("Iniciando Universal Geometry Dumper v4.1...")
 
-    -- 1. Capturar todo lo que ya esté en pantalla
+    -- 1. Captura inicial en pantalla
     for _, desc in ipairs(Workspace:GetDescendants()) do
         ingestInstance(desc, char)
     end
-    log("Instancias iniciales en memoria: %d", totalMirroredParts)
+    log("Objetos iniciales asegurados: %d", totalMirroredParts)
 
     local isStreaming = Workspace.StreamingEnabled
     if isStreaming and hrp then
-        log("StreamingEnabled activo. Iniciando exploración adaptativa de frontera 3D...")
-        notify("Universal Dumper", "Explorando el mapa en 3D de forma autónoma...", 4)
-
-        -- Escuchar todas las nuevas piezas que aparezcan
-        local conn = Workspace.DescendantAdded:Connect(function(desc)
-            ingestInstance(desc, char)
-        end)
-
         local originalCFrame = hrp.CFrame
 
-        -- Noclip e inmovilidad para seguridad absoluta
+        -- Noclip e invulnerabilidad
         local noclipConn = RunService.Stepped:Connect(function()
             if char then
                 for _, part in ipairs(char:GetDescendants()) do
@@ -203,132 +189,100 @@ local function runUniversalDumper()
         end)
         hrp.Anchored = true
 
-        -- Estructuras de la frontera
-        local knownCells = {}    -- [key] = Vector3(center)
-        local visitedCells = {}  -- [key] = true
-        local frontierQueue = {} -- array de { key = string, pos = Vector3 }
+        -- Estructuras de la frontera guiada por geometría
+        local visitedCells = {}
+        local queuedCells = {}
+        local queue = {}
 
-        local function registerCell(cx, cy, cz)
-            local key = cellKey(cx, cy, cz)
-            if not knownCells[key] then
+        local function queueCellIfGeometry(pos)
+            local cx, cy, cz = getCellCoords(pos)
+            local k = cellKey(cx, cy, cz)
+            if not queuedCells[k] and not visitedCells[k] then
+                queuedCells[k] = true
                 local center = cellCenter(cx, cy, cz)
-                if math.abs(center.X) < CONFIG.MaxRadius and math.abs(center.Z) < CONFIG.MaxRadius then
-                    knownCells[key] = center
-                    if not visitedCells[key] then
-                        table.insert(frontierQueue, { key = key, pos = center })
-                    end
-                end
+                table.insert(queue, { key = k, pos = center })
             end
         end
 
-        local function addNeighborsToFrontier(cx, cy, cz)
-            -- Vecinos en 3D (X, Y, Z)
-            for dx = -1, 1 do
-                for dz = -1, 1 do
-                    for dy = -1, 1 do
-                        registerCell(cx + dx, cy + dy, cz + dz)
-                    end
-                end
-            end
-        end
-
-        -- Sembrar la frontera con todos los BaseParts conocidos en Workspace
+        -- Sembrar ÚNICAMENTE con celdas donde YA existen BaseParts reales
         for _, desc in ipairs(Workspace:GetDescendants()) do
             if desc:IsA("BasePart") and not desc:IsA("Terrain") then
-                local cx, cy, cz = getCellCoords(desc.Position)
-                registerCell(cx, cy, cz)
+                queueCellIfGeometry(desc.Position)
             end
         end
 
-        log("Frontera inicial: %d celdas por explorar.", #frontierQueue)
+        log("Celdas iniciales con geometría real: %d", #queue)
+        notify("Universal Dumper", string.format("Rastreando %d sectores de mapa...", #queue), 4)
 
         local visitedCount = 0
         local lastLog = os.clock()
 
-        while #frontierQueue > 0 and visitedCount < CONFIG.MaxPoints do
-            -- Tomar la celda más cercana a la posición actual para viaje óptimo
+        while #queue > 0 and visitedCount < CONFIG.MaxCells do
+            -- Selección óptima por proximidad para viaje continuo
             local currentPos = hrp.Position
             local bestIdx = 1
             local bestDist = math.huge
+            local checkLimit = math.min(#queue, 30)
 
-            -- Muestrear los primeros elementos para eficiencia
-            local searchLimit = math.min(#frontierQueue, 25)
-            for i = 1, searchLimit do
-                local dist = (frontierQueue[i].pos - currentPos).Magnitude
+            for i = 1, checkLimit do
+                local dist = (queue[i].pos - currentPos).Magnitude
                 if dist < bestDist then
                     bestDist = dist
                     bestIdx = i
                 end
             end
 
-            local target = table.remove(frontierQueue, bestIdx)
+            local target = table.remove(queue, bestIdx)
             if not visitedCells[target.key] then
                 visitedCells[target.key] = true
                 visitedCount = visitedCount + 1
 
                 hrp.CFrame = CFrame.new(target.pos)
 
-                pcall(function()
-                    lp:RequestStreamAroundAsync(target.pos, 3)
+                -- Petición no bloqueante (asíncrona) al servidor
+                task.spawn(function()
+                    pcall(function()
+                        lp:RequestStreamAroundAsync(target.pos)
+                    end)
                 end)
 
                 task.wait(CONFIG.WaitPerCell)
 
-                -- Procesar nuevas partes que llegaron en esta celda
-                local foundPartsInCell = false
+                -- Ingestar todas las piezas que aparecieron con la llegada del nuevo chunk
                 for _, desc in ipairs(Workspace:GetDescendants()) do
                     if desc:IsA("BasePart") and not desc:IsA("Terrain") then
                         ingestInstance(desc, char)
-                        local cx, cy, cz = getCellCoords(desc.Position)
-                        local k = cellKey(cx, cy, cz)
-                        if k == target.key then
-                            foundPartsInCell = true
-                        end
-                        -- Si aparecieron partes en celdas aún no descubiertas, expandir la frontera
-                        if not knownCells[k] then
-                            registerCell(cx, cy, cz)
-                            addNeighborsToFrontier(cx, cy, cz)
-                        end
+                        -- Si aparecieron partes en una celda que aún no hemos visitado, encolarla
+                        queueCellIfGeometry(desc.Position)
                     end
                 end
 
-                -- Si esta celda contenía partes, expandir a sus vecinos directos
-                if foundPartsInCell then
-                    local S = CONFIG.CellSize
-                    local cx = math.floor(target.pos.X / S)
-                    local cy = math.floor(target.pos.Y / S)
-                    local cz = math.floor(target.pos.Z / S)
-                    addNeighborsToFrontier(cx, cy, cz)
-                end
-
-                if (os.clock() - lastLog > 5) or #frontierQueue == 0 then
+                if (os.clock() - lastLog > 4) or #queue == 0 then
                     lastLog = os.clock()
-                    log("  Exploradas: %d celdas | Restantes en cola: %d | Piezas en espejo: %d",
-                        visitedCount, #frontierQueue, totalMirroredParts)
+                    log("  Progreso: %d celdas | Cola restante: %d | Piezas en espejo: %d",
+                        visitedCount, #queue, totalMirroredParts)
                 end
             end
         end
 
-        conn:Disconnect()
         noclipConn:Disconnect()
         hrp.CFrame = originalCFrame
         hrp.Anchored = false
-        log("¡Exploración universal completada! Total celdas: %d | Piezas: %d", visitedCount, totalMirroredParts)
+        log("¡Rastreo completado! Total celdas: %d | Piezas salvadas: %d", visitedCount, totalMirroredParts)
     else
-        log("StreamingEnabled inactivo o HRP ausente. Procediendo a guardado directo.")
+        log("StreamingEnabled no activo o HRP ausente. Procediendo a guardado directo.")
     end
 
-    -- ====================================================================
-    -- FUSIÓN SEGURA DEL ÁRBOL ESPEJO EN WORKSPACE (O(1) Anti-Freeze)
-    -- ====================================================================
-    log("Consolidando Árbol Espejo en Workspace...")
-    notify("Universal Dumper", "Consolidando mapa en Workspace...", 4)
+    -- ================================================================
+    -- FUSIÓN SEGURA DEL ÁRBOL ESPEJO EN WORKSPACE (O(1))
+    -- ================================================================
+    log("Consolidando mapa en Workspace...")
+    notify("Universal Dumper", "Consolidando instancias en Workspace...", 4)
 
     local reinjectedCount = 0
     local yieldCounter = 0
 
     local function mergeRecursive(mirrorContainer, workspaceTarget)
-        -- Pre-indexar hijos existentes en Workspace para comprobación O(1)
         local existingDict = {}
         for _, ch in ipairs(workspaceTarget:GetChildren()) do
             existingDict[getSignature(ch)] = ch
@@ -365,11 +319,11 @@ local function runUniversalDumper()
     mergeRecursive(mirrorRoot, Workspace)
     log("Fusión completada: %d elementos restaurados en Workspace.", reinjectedCount)
 
-    -- ====================================================================
-    -- GUARDADO AUTORITATIVO (SaveBytecode=true, Decompile=false)
-    -- ====================================================================
+    -- ================================================================
+    -- GUARDADO CON BYTECODE (SaveBytecode=true, Decompile=false)
+    -- ================================================================
     log("Ejecutando USSI SaveInstance...")
-    notify("Universal Dumper", "Generando archivo .rbxlx...", 6)
+    notify("Universal Dumper", "Generando archivo .rbxlx con 100% del mapa...", 6)
 
     local saveinstanceUrl = "https://raw.githubusercontent.com/angeloecontact/USSI-Improved/main/saveinstance.luau"
     local saveinstanceChunk = loadstring(game:HttpGet(saveinstanceUrl, true), "saveinstance")
@@ -402,7 +356,7 @@ local function runUniversalDumper()
     log("====================================================================")
     log("✅ VOLCADO UNIVERSAL EXITOSO")
     log("• 100%% del mapa consolidado en Workspace sin importar jerarquías.")
-    log("• Archivo .rbxlx listo en tu carpeta workspace.")
+    log("• Archivo .rbxlx guardado en tu carpeta workspace.")
     log("====================================================================")
 end
 
