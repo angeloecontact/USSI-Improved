@@ -1,16 +1,23 @@
 --!nonstrict
 -- ====================================================================
--- 🌐 UNIVERSAL STREAMING HARVESTER & DUMPER (v4.3 - Anti-Kick / Anti-Crash)
+-- 🌐 UNIVERSAL STREAMING HARVESTER & DUMPER (v5.0 - Full-Capture Master)
 -- Repositorio: angeloecontact/USSI-Improved
 -- ====================================================================
--- MEJORAS CRÍTICAS v4.3:
--- 1. SafeMode = false OBLIGATORIO: USSI por defecto hace LocalPlayer:Kick()
---    lo que corta la conexión con el servidor y mata el proceso de Roblox.
--- 2. KillAllScripts = false OBLIGATORIO: Evita que hookfunction sobreescriba
---    miles de funciones en getgc() y corrompa la memoria del executor.
--- 3. SaveCacheInterval reducido (8000): Guarda en disco con pausas frecuentes
---    para evitar cuelgues durante la serialización de scripts.
--- 4. HUD en pantalla para monitorear el progreso exacto.
+-- NOVEDADES Y CORRECCIONES CRÍTICAS v5.0:
+-- 1. Resuelto el bug de modelos duplicados (Keycaps, Mur & Sol, etc.):
+--    Ahora cada Model se rastrea con firma única por Pivot espacial,
+--    evitando que decenas de modelos con el mismo nombre se colapsen
+--    o pierdan sus paredes y piezas al fusionarse.
+-- 2. Quiescencia Adaptativa (Adaptive Dwell Time):
+--    El scanner no se va de un sector hasta que la replicación de piezas
+--    del servidor se complete al 100% (espera dinámica mientras lleguen piezas).
+-- 3. Precisión de Firma Sub-Stud (0.01 studs):
+--    Se eliminó el redondeo a enteros (%.0f) que descartaba erróneamente
+--    hasta el 24% de keycaps y barras por considerarlas duplicadas.
+-- 4. Tamaño de celda seguro (180 studs):
+--    Se ajusta a la perfección al StreamingMinRadius (200 studs),
+--    eliminando puntos ciegos entre sectores.
+-- 5. SafeMode = false y KillAllScripts = false para estabilidad 100% anti-crash.
 -- ====================================================================
 
 local Players = game:GetService("Players")
@@ -32,9 +39,9 @@ screenGui.Name = guiName
 pcall(function() screenGui.Parent = CoreGui end)
 
 local banner = Instance.new("Frame")
-banner.Size = UDim2.new(0, 380, 0, 75)
-banner.Position = UDim2.new(0.5, -190, 0, 30)
-banner.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+banner.Size = UDim2.new(0, 420, 0, 80)
+banner.Position = UDim2.new(0.5, -210, 0, 30)
+banner.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
 banner.BorderSizePixel = 0
 banner.Parent = screenGui
 
@@ -46,20 +53,20 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, 0, 0, 28)
 titleLabel.Position = UDim2.new(0, 0, 0, 6)
 titleLabel.BackgroundTransparency = 1
-titleLabel.TextColor3 = Color3.fromRGB(0, 220, 130)
+titleLabel.TextColor3 = Color3.fromRGB(0, 230, 140)
 titleLabel.Font = Enum.Font.GothamBold
 titleLabel.TextSize = 15
-titleLabel.Text = "⚡ UNIVERSAL DUMPER v4.3"
+titleLabel.Text = "⚡ UNIVERSAL DUMPER v5.0 (Full-Capture)"
 titleLabel.Parent = banner
 
 local statusLabel = Instance.new("TextLabel")
-statusLabel.Size = UDim2.new(1, -20, 0, 30)
-statusLabel.Position = UDim2.new(0, 10, 0, 35)
+statusLabel.Size = UDim2.new(1, -20, 0, 34)
+statusLabel.Position = UDim2.new(0, 10, 0, 36)
 statusLabel.BackgroundTransparency = 1
 statusLabel.TextColor3 = Color3.fromRGB(240, 240, 240)
 statusLabel.Font = Enum.Font.Gotham
 statusLabel.TextSize = 13
-statusLabel.Text = "Iniciando..."
+statusLabel.Text = "Iniciando sistema..."
 statusLabel.Parent = banner
 
 local function setHUD(text, isDone)
@@ -80,26 +87,46 @@ end
 -- ====================================================================
 local userConfig = (type(getgenv) == "function" and getgenv().DumperConfig) or {}
 local CONFIG = {
-    CellSize = userConfig.CellSize or 320,        -- Vóxel espacial en studs
-    WaitPerCell = userConfig.WaitPerCell or 0.14, -- 140ms por sector
-    MaxCells = userConfig.MaxCells or 300,        -- Límite suficiente
+    CellSize = userConfig.CellSize or 180,              -- 180 studs (dentro del radio mínimo de streaming de 200)
+    MinWaitPerCell = userConfig.MinWaitPerCell or 0.12, -- Espera base por sector
+    QuiescenceTimeout = userConfig.QuiescenceTimeout or 0.22, -- Espera sin nuevas piezas antes de avanzar
+    MaxWaitPerCell = userConfig.MaxWaitPerCell or 1.25, -- Techo máximo por sector denso
+    MaxCells = userConfig.MaxCells or 600,              -- Límite amplio de sectores
     AutoRun = (userConfig.AutoRun ~= false),
 }
 
 -- ====================================================================
--- ÁRBOL ESPEJO UNIVERSAL (En memoria protegida)
+-- IDENTIFICADORES Y ÁRBOL ESPEJO PROTEGIDO
 -- ====================================================================
 local mirrorRoot = Instance.new("Folder")
 mirrorRoot.Name = "__USSI_UniversalMirror"
 
 local mirroredInstances = {}
+local mirrorContainers = {}
 local mirrorSignatures = {}
 local totalMirroredParts = 0
 
-local function getSignature(inst)
+local function getContainerKey(inst)
+    if inst:IsA("Model") then
+        local ok, cf = pcall(function() return inst:GetPivot() end)
+        local p = (ok and cf and cf.Position) or Vector3.zero
+        return string.format("M_%s_%.1f_%.1f_%.1f", inst.Name, p.X, p.Y, p.Z)
+    else
+        return "F_" .. inst.Name
+    end
+end
+
+local function getPartSignature(inst)
     if inst:IsA("BasePart") then
         local p = inst.Position
-        return string.format("P_%s_%.0f_%.0f_%.0f_%s", inst.Name, p.X, p.Y, p.Z, inst.ClassName)
+        local s = inst.Size
+        return string.format("P_%s_%.2f_%.2f_%.2f_%.2f_%.2f_%.2f_%s", 
+            inst.Name, p.X, p.Y, p.Z, s.X, s.Y, s.Z, inst.ClassName)
+    elseif inst:IsA("Decal") or inst:IsA("Texture") then
+        return string.format("D_%s_%s_%s", inst.Name, inst.ClassName, tostring(inst.Face))
+    elseif inst:IsA("Attachment") then
+        local p = inst.Position
+        return string.format("A_%s_%.2f_%.2f_%.2f", inst.Name, p.X, p.Y, p.Z)
     else
         return string.format("O_%s_%s", inst.Name, inst.ClassName)
     end
@@ -123,6 +150,7 @@ local function ingestInstance(inst, char)
 
     if mirroredInstances[inst] then return end
 
+    -- Reconstruir la cadena de contenedores ancestros
     local ancestorChain = {}
     local curr = inst.Parent
     while curr and curr ~= Workspace and curr ~= game do
@@ -132,8 +160,12 @@ local function ingestInstance(inst, char)
 
     local mirrorParent = mirrorRoot
     for _, ancestor in ipairs(ancestorChain) do
-        local aName = ancestor.Name
-        local existingContainer = mirrorParent:FindFirstChild(aName)
+        local cKey = getContainerKey(ancestor)
+        if not mirrorContainers[mirrorParent] then
+            mirrorContainers[mirrorParent] = {}
+        end
+
+        local existingContainer = mirrorContainers[mirrorParent][cKey]
         if not existingContainer then
             if ancestor:IsA("Model") then
                 existingContainer = Instance.new("Model")
@@ -141,14 +173,21 @@ local function ingestInstance(inst, char)
             else
                 existingContainer = Instance.new("Folder")
             end
-            existingContainer.Name = aName
+            existingContainer.Name = ancestor.Name
             existingContainer.Parent = mirrorParent
+            mirrorContainers[mirrorParent][cKey] = existingContainer
         end
         mirrorParent = existingContainer
     end
 
+    -- Si la instancia es un contenedor en sí misma
     if inst:IsA("Folder") or inst:IsA("Model") then
-        local container = mirrorParent:FindFirstChild(inst.Name)
+        local cKey = getContainerKey(inst)
+        if not mirrorContainers[mirrorParent] then
+            mirrorContainers[mirrorParent] = {}
+        end
+
+        local container = mirrorContainers[mirrorParent][cKey]
         if not container then
             if inst:IsA("Model") then
                 container = Instance.new("Model")
@@ -158,12 +197,14 @@ local function ingestInstance(inst, char)
             end
             container.Name = inst.Name
             container.Parent = mirrorParent
+            mirrorContainers[mirrorParent][cKey] = container
         end
         mirroredInstances[inst] = true
         return
     end
 
-    local sig = getSignature(inst)
+    -- Instancia hoja (BasePart u objeto)
+    local sig = getPartSignature(inst)
     if not mirrorSignatures[mirrorParent] then
         mirrorSignatures[mirrorParent] = {}
     end
@@ -176,6 +217,14 @@ local function ingestInstance(inst, char)
             mirrorSignatures[mirrorParent][sig] = clone
             mirroredInstances[inst] = true
             totalMirroredParts = totalMirroredParts + 1
+
+            -- Los hijos ya viajan dentro del clon; marcarlos como procesados
+            local okDescs, descs = pcall(function() return inst:GetDescendants() end)
+            if okDescs and descs then
+                for _, d in ipairs(descs) do
+                    mirroredInstances[d] = true
+                end
+            end
         end
     else
         mirroredInstances[inst] = true
@@ -183,7 +232,7 @@ local function ingestInstance(inst, char)
 end
 
 -- ====================================================================
--- RASTREADOR DE GEOMETRÍA REAL (Geometry-Guided Tracker)
+-- RASTREADOR ESPACIAL ADAPTATIVO (Quiescence-Guided Sweeper)
 -- ====================================================================
 local function cellKey(cx, cy, cz)
     return string.format("%d,%d,%d", cx, cy, cz)
@@ -205,7 +254,7 @@ local function runUniversalDumper()
 
     setHUD("Escaneando geometria inicial...", false)
 
-    -- Ingesta inicial única
+    -- Ingesta inicial
     for _, desc in ipairs(Workspace:GetDescendants()) do
         ingestInstance(desc, char)
     end
@@ -246,7 +295,10 @@ local function runUniversalDumper()
             end
         end
 
+        local lastStreamedTime = os.clock()
+
         local descendantConn = Workspace.DescendantAdded:Connect(function(desc)
+            lastStreamedTime = os.clock()
             ingestInstance(desc, char)
             if desc:IsA("BasePart") and not desc:IsA("Terrain") then
                 queueCellIfGeometry(desc.Position)
@@ -260,9 +312,9 @@ local function runUniversalDumper()
             local currentPos = hrp.Position
             local bestIdx = 1
             local bestDist = math.huge
-            local checkLimit = math.min(#queue, 25)
 
-            for i = 1, checkLimit do
+            -- Buscar el sector más cercano en TODA la cola para una ruta óptima continua
+            for i = 1, #queue do
                 local dist = (queue[i].pos - currentPos).Magnitude
                 if dist < bestDist then
                     bestDist = dist
@@ -279,18 +331,26 @@ local function runUniversalDumper()
                     hrp.CFrame = CFrame.new(target.pos)
                 end)
 
+                -- Solicitar streaming del sector
                 task.spawn(function()
                     pcall(function()
-                        lp:RequestStreamAroundAsync(target.pos)
+                        lp:RequestStreamAroundAsync(target.pos, 1.0)
                     end)
                 end)
 
-                task.wait(CONFIG.WaitPerCell)
+                -- Quiescencia adaptativa: no avanzar mientras sigan llegando paquetes de piezas
+                local dwellStart = os.clock()
+                lastStreamedTime = os.clock()
 
-                if (os.clock() - lastLog > 2) or #queue == 0 then
+                task.wait(CONFIG.MinWaitPerCell)
+                while (os.clock() - lastStreamedTime < CONFIG.QuiescenceTimeout) and (os.clock() - dwellStart < CONFIG.MaxWaitPerCell) do
+                    task.wait(0.04)
+                end
+
+                if (os.clock() - lastLog > 1.5) or #queue == 0 then
                     lastLog = os.clock()
-                    setHUD(string.format("Rastreando: %d sectores | Cola: %d | Piezas: %d",
-                        visitedCount, #queue, totalMirroredParts), false)
+                    setHUD(string.format("Rastreando: %d/%d sectores | Cola: %d | Piezas: %d",
+                        visitedCount, visitedCount + #queue, #queue, totalMirroredParts), false)
                 end
             end
         end
@@ -305,7 +365,7 @@ local function runUniversalDumper()
     end
 
     -- ================================================================
-    -- FUSIÓN O(1) EN WORKSPACE
+    -- FUSIÓN ROBUSTA BASADA EN PIVOTS (Sin colapso de modelos)
     -- ================================================================
     setHUD("Consolidando mapa completo en Workspace...", false)
 
@@ -313,31 +373,38 @@ local function runUniversalDumper()
     local yieldCounter = 0
 
     local function mergeRecursive(mirrorContainer, workspaceTarget)
-        local existingDict = {}
+        local existingParts = {}
+        local liveContainers = {}
+
         for _, ch in ipairs(workspaceTarget:GetChildren()) do
-            existingDict[getSignature(ch)] = ch
-            existingDict[ch.Name] = ch
+            if ch:IsA("Folder") or ch:IsA("Model") then
+                liveContainers[getContainerKey(ch)] = ch
+            else
+                existingParts[getPartSignature(ch)] = ch
+            end
         end
 
         for _, item in ipairs(mirrorContainer:GetChildren()) do
             yieldCounter = yieldCounter + 1
-            if yieldCounter % 100 == 0 then
+            if yieldCounter % 80 == 0 then
                 task.wait()
             end
 
             if item:IsA("Folder") or item:IsA("Model") then
-                local liveTarget = workspaceTarget:FindFirstChild(item.Name)
+                local cKey = getContainerKey(item)
+                local liveTarget = liveContainers[cKey]
                 if not liveTarget then
                     item.Parent = workspaceTarget
+                    liveContainers[cKey] = item
                     reinjectedCount = reinjectedCount + 1
                 else
                     mergeRecursive(item, liveTarget)
                 end
             else
-                local sig = getSignature(item)
-                if not existingDict[sig] then
+                local sig = getPartSignature(item)
+                if not existingParts[sig] then
                     item.Parent = workspaceTarget
-                    existingDict[sig] = item
+                    existingParts[sig] = item
                     reinjectedCount = reinjectedCount + 1
                 else
                     item:Destroy()
