@@ -1,23 +1,25 @@
 --!nonstrict
 -- ====================================================================
--- 🌐 UNIVERSAL STREAMING HARVESTER & DUMPER (v5.0 - Full-Capture Master)
+-- 🌐 UNIVERSAL STREAMING HARVESTER & DUMPER (v5.1 - Surface Lock & Deep Dwell)
 -- Repositorio: angeloecontact/USSI-Improved
 -- ====================================================================
--- NOVEDADES Y CORRECCIONES CRÍTICAS v5.0:
--- 1. Resuelto el bug de modelos duplicados (Keycaps, Mur & Sol, etc.):
---    Ahora cada Model se rastrea con firma única por Pivot espacial,
---    evitando que decenas de modelos con el mismo nombre se colapsen
---    o pierdan sus paredes y piezas al fusionarse.
--- 2. Quiescencia Adaptativa (Adaptive Dwell Time):
---    El scanner no se va de un sector hasta que la replicación de piezas
---    del servidor se complete al 100% (espera dinámica mientras lleguen piezas).
--- 3. Precisión de Firma Sub-Stud (0.01 studs):
---    Se eliminó el redondeo a enteros (%.0f) que descartaba erróneamente
---    hasta el 24% de keycaps y barras por considerarlas duplicadas.
--- 4. Tamaño de celda seguro (180 studs):
---    Se ajusta a la perfección al StreamingMinRadius (200 studs),
---    eliminando puntos ciegos entre sectores.
--- 5. SafeMode = false y KillAllScripts = false para estabilidad 100% anti-crash.
+-- NOVEDADES Y CORRECCIONES CRÍTICAS v5.1:
+-- 1. Teletransporte a Nivel de Superficie (Surface-Level Lock):
+--    Antes el jugador se teletransportaba al centro matemático del vóxel 3D
+--    (a veces a 90 studs de altura en el aire o bajo el suelo), dejando los
+--    keycaps y plataformas fuera del radio de streaming (StreamingMinRadius = 200).
+--    Ahora se sitúa exactamente sobre la superficie de la geometría (Y + 3.5 studs).
+-- 2. Streaming Sincrónico Asistido por Motor (RequestStreamAroundAsync):
+--    Se ejecuta de forma sincrónica con timeout de 1.8s para obligar al
+--    servidor de Roblox a entregar el paquete completo de la zona antes de evaluar.
+-- 3. Quiescencia de Red Real (Deep Quiescence):
+--    MinWait de 200ms para absorber la latencia (ping) de red, y ventana de
+--    quiescencia de 350ms con techo de hasta 3.0s en zonas hiperdensas de keycaps.
+-- 4. Tamaño de celda ultra-seguro (140 studs):
+--    El radio máximo a cualquier esquina es de ~99 studs (muy por debajo de los 200
+--    studs garantizados del juego), eliminando todo corte diagonal o parche ciego.
+-- 5. Límite MaxCells ampliado a 3500:
+--    Cubre mapas gigantes de más de 25,000 studs de longitud sin cortarse a mitad de camino.
 -- ====================================================================
 
 local Players = game:GetService("Players")
@@ -56,7 +58,7 @@ titleLabel.BackgroundTransparency = 1
 titleLabel.TextColor3 = Color3.fromRGB(0, 230, 140)
 titleLabel.Font = Enum.Font.GothamBold
 titleLabel.TextSize = 15
-titleLabel.Text = "⚡ UNIVERSAL DUMPER v5.0 (Full-Capture)"
+titleLabel.Text = "⚡ UNIVERSAL DUMPER v5.1 (Deep Dwell)"
 titleLabel.Parent = banner
 
 local statusLabel = Instance.new("TextLabel")
@@ -87,11 +89,11 @@ end
 -- ====================================================================
 local userConfig = (type(getgenv) == "function" and getgenv().DumperConfig) or {}
 local CONFIG = {
-    CellSize = userConfig.CellSize or 180,              -- 180 studs (dentro del radio mínimo de streaming de 200)
-    MinWaitPerCell = userConfig.MinWaitPerCell or 0.12, -- Espera base por sector
-    QuiescenceTimeout = userConfig.QuiescenceTimeout or 0.22, -- Espera sin nuevas piezas antes de avanzar
-    MaxWaitPerCell = userConfig.MaxWaitPerCell or 1.25, -- Techo máximo por sector denso
-    MaxCells = userConfig.MaxCells or 600,              -- Límite amplio de sectores
+    CellSize = userConfig.CellSize or 140,              -- 140 studs (radio máximo esquina < 100 studs)
+    MinWaitPerCell = userConfig.MinWaitPerCell or 0.20, -- Mínimo 200ms para absorber ping de red
+    QuiescenceTimeout = userConfig.QuiescenceTimeout or 0.35, -- 350ms sin piezas antes de avanzar
+    MaxWaitPerCell = userConfig.MaxWaitPerCell or 3.0,  -- Techo generoso para miles de keycaps
+    MaxCells = userConfig.MaxCells or 3500,             -- Suficiente para recorrer cualquier mapa de punta a punta
     AutoRun = (userConfig.AutoRun ~= false),
 }
 
@@ -144,8 +146,8 @@ end
 
 local function ingestInstance(inst)
     if not inst or not inst.Parent then return end
-    
-    -- Ignorar personajes de cualquier jugador en el servidor
+
+    -- Ignorar personajes de jugadores
     for _, p in ipairs(Players:GetPlayers()) do
         local pChar = p.Character
         if pChar and (inst == pChar or inst:IsDescendantOf(pChar)) then return end
@@ -236,7 +238,7 @@ local function ingestInstance(inst)
 end
 
 -- ====================================================================
--- RASTREADOR ESPACIAL ADAPTATIVO (Quiescence-Guided Sweeper)
+-- RASTREADOR ESPACIAL ADAPTATIVO (Surface-Level Guided Sweeper)
 -- ====================================================================
 local function cellKey(cx, cy, cz)
     return string.format("%d,%d,%d", cx, cy, cz)
@@ -247,13 +249,10 @@ local function getCellCoords(pos)
     return math.floor(pos.X / S), math.floor(pos.Y / S), math.floor(pos.Z / S)
 end
 
-local function cellCenter(cx, cy, cz)
-    local S = CONFIG.CellSize
-    return Vector3.new((cx + 0.5) * S, (cy + 0.5) * S, (cz + 0.5) * S)
-end
-
 local function runUniversalDumper()
     local char = lp.Character or lp.CharacterAdded:Wait()
+    local hrp = char:WaitForChild("HumanoidRootPart", 10)
+
     local function getActiveHRP()
         if hrp and hrp.Parent and hrp.Parent.Parent then return hrp end
         local c = lp.Character
@@ -301,8 +300,8 @@ local function runUniversalDumper()
             local k = cellKey(cx, cy, cz)
             if not queuedCells[k] and not visitedCells[k] then
                 queuedCells[k] = true
-                local center = cellCenter(cx, cy, cz)
-                table.insert(queue, { key = k, pos = center })
+                -- Teletransportarse directamente al nivel de la superficie (Y + 3.5 studs)
+                table.insert(queue, { key = k, pos = Vector3.new(pos.X, pos.Y + 3.5, pos.Z) })
             end
         end
 
@@ -331,7 +330,7 @@ local function runUniversalDumper()
             local bestIdx = 1
             local bestDist = math.huge
 
-            -- Buscar el sector más cercano en TODA la cola para una ruta óptima continua
+            -- Buscar el sector más cercano en TODA la cola para una ruta continua y óptima
             for i = 1, #queue do
                 local dist = (queue[i].pos - currentPos).Magnitude
                 if dist < bestDist then
@@ -353,26 +352,23 @@ local function runUniversalDumper()
                     end
                 end)
 
-                -- Solicitar streaming del sector
-                task.spawn(function()
-                    pcall(function()
-                        lp:RequestStreamAroundAsync(target.pos, 1.0)
-                    end)
+                -- Solicitar activamente el streaming de la zona alrededor de la posición exacta
+                pcall(function()
+                    lp:RequestStreamAroundAsync(target.pos, 1.8)
                 end)
 
-                -- Quiescencia adaptativa: no avanzar mientras sigan llegando paquetes de piezas
+                -- Quiescencia de red profunda: esperar mientras el servidor siga entregando paquetes
                 local dwellStart = os.clock()
-                lastStreamedTime = os.clock()
-
                 task.wait(CONFIG.MinWaitPerCell)
+
                 while (os.clock() - lastStreamedTime < CONFIG.QuiescenceTimeout) and (os.clock() - dwellStart < CONFIG.MaxWaitPerCell) do
-                    task.wait(0.04)
+                    task.wait(0.05)
                 end
 
                 if (os.clock() - lastLog > 1.5) or #queue == 0 then
                     lastLog = os.clock()
-                    setHUD(string.format("Rastreando: %d/%d sectores | Cola: %d | Piezas: %d",
-                        visitedCount, visitedCount + #queue, #queue, totalMirroredParts), false)
+                    setHUD(string.format("Rastreando: %d sectores | Cola: %d | Piezas: %d",
+                        visitedCount, #queue, totalMirroredParts), false)
                 end
             end
         end
