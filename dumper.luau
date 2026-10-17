@@ -496,11 +496,20 @@ local function runUniversalDumper()
                                     kc.Anchored = true
                                     kc.CanCollide = true
 
+                                    local col = record.Color or kc.Color
                                     if appearances and char then
                                         local sa = appearances:FindFirstChild(char)
                                         if sa then
                                             local saClone = sa:Clone()
+                                            if col then
+                                                pcall(function() saClone.Color = col end)
+                                            end
                                             saClone.Parent = kc
+                                        end
+                                    else
+                                        local existingSa = kc:FindFirstChildWhichIsA("SurfaceAppearance")
+                                        if existingSa and col then
+                                            pcall(function() existingSa.Color = col end)
                                         end
                                     end
 
@@ -519,6 +528,19 @@ local function runUniversalDumper()
                                     createdCount = createdCount + 1
                                 end
                             end
+
+                            -- Sincronizar colores de SurfaceAppearance en todas las teclas del folder
+                            for _, existingKeycap in ipairs(keycapsFolder:GetChildren()) do
+                                if existingKeycap:IsA("BasePart") then
+                                    local sa = existingKeycap:FindFirstChildWhichIsA("SurfaceAppearance")
+                                    if sa and existingKeycap.Color then
+                                        pcall(function()
+                                            sa.Color = existingKeycap.Color
+                                        end)
+                                    end
+                                end
+                            end
+
                             setHUD(string.format("Pool sincronizado: %d keycaps completados al 100%%", createdCount), false)
                         end
                     end
@@ -586,6 +608,25 @@ local function runUniversalDumper()
     -- Destruir contenedor espejo
     pcall(function() mirrorRoot:Destroy() end)
     task.wait(0.3)
+
+    -- ================================================================
+    -- SINCRONIZACIÓN UNIVERSAL DE SURFACEAPPEARANCE (Color & Material Fidelity)
+    -- ================================================================
+    setHUD("Sincronizando colores y texturas de SurfaceAppearance...", false)
+    pcall(function()
+        for _, desc in ipairs(Workspace:GetDescendants()) do
+            if desc:IsA("SurfaceAppearance") and desc.Parent and desc.Parent:IsA("BasePart") then
+                local parentCol = desc.Parent.Color
+                pcall(function()
+                    if desc.Color == Color3.new(1, 1, 1) or desc.Color == Color3.fromRGB(212, 192, 186) or desc.Color == Color3.fromRGB(220, 220, 220) then
+                        if parentCol and parentCol ~= Color3.new(1, 1, 1) then
+                            desc.Color = parentCol
+                        end
+                    end
+                end)
+            end
+        end
+    end)
 
     -- ================================================================
     -- GUARDADO SEGURO ANTI-CRASH (SafeMode=false, KillAllScripts=false)
