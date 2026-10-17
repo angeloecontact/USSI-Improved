@@ -1,19 +1,26 @@
 --!nonstrict
 -- ====================================================================
--- 🌐 UNIVERSAL STREAMING HARVESTER & DUMPER (v5.3 - Anti-Stall Bulletproof)
+-- 🌐 UNIVERSAL STREAMING HARVESTER & DUMPER (v5.4 - Universal Pool & LOD Master)
 -- Repositorio: angeloecontact/USSI-Improved
 -- ====================================================================
--- MEJORAS CRÍTICAS v5.3 (Anti-Freeze & Anti-Floating):
--- 1. Eliminación del congelamiento de RequestStreamAroundAsync:
---    Se aisló en task.spawn para que si el motor de Roblox tarda o se queda
---    esperando respuesta en el vacío, el hilo principal continúe con su reloj estricto.
--- 2. Eliminación de pivotes fantasma en el cielo:
---    Ya no se encolan Models que tengan pivotes descalibrados en las nubes;
---    únicamente se encolan BaseParts físicas reales con geometría existente.
--- 3. Raycast profundo hacia el suelo (hasta 250 studs):
---    Detecta terreno o piso real incluso debajo de piezas altas o techos,
---    evitando que el personaje quede suspendido en el aire.
--- 4. Techo de espera estricto por sector (1.8s) y resolución 3D (140x60 studs).
+-- MEJORAS CRÍTICAS v5.4 (Anti-Loss & Object-Pool Immunit):
+-- 1. Deduplicación por Firma Espacial Pura (Anti-Pool Loss):
+--    Se eliminó el bloqueo por puntero de instancia (mirroredInstances[inst]) que
+--    descartaba piezas cuando un object pool las reciclaba o movía a otra posición.
+--    Ahora cada posición única en el mundo se clona y preserva sin duplicados.
+-- 2. Sincronización Estricta de Cámara (LOD & Streaming Activator):
+--    Workspace.CurrentCamera se teletransporta en sincronía exacta con el personaje,
+--    forzando a los motores de streaming y chunk renderers basados en cámara a cargar
+--    de inmediato todos los detalles del sector.
+-- 3. Barrido Espacial Local 3D (GetPartBoundsInBox):
+--    En cada sector se realiza una consulta geométrica 3D nativa para capturar cualquier
+--    pieza que haya cambiado de CFrame sin disparar eventos de reparenting.
+-- 4. Jerarquía de Modelos Estable (Anti-Splintering):
+--    Claves de contenedor estables para evitar que modelos grandes se fragmenten
+--    a medida que su bounding box se expande con el streaming.
+-- 5. Materializador Maestro de Pools en Memoria:
+--    Sincroniza y materializa al 100% registros en memoria (KeycapPoolRenderer)
+--    garantizando que ninguna tecla, rampa o campo quede vacío.
 -- ====================================================================
 
 local Players = game:GetService("Players")
@@ -52,7 +59,7 @@ titleLabel.BackgroundTransparency = 1
 titleLabel.TextColor3 = Color3.fromRGB(0, 230, 140)
 titleLabel.Font = Enum.Font.GothamBold
 titleLabel.TextSize = 15
-titleLabel.Text = "⚡ UNIVERSAL DUMPER v5.3 (Anti-Stall)"
+titleLabel.Text = "⚡ UNIVERSAL DUMPER v5.4 (Pool Master)"
 titleLabel.Parent = banner
 
 local statusLabel = Instance.new("TextLabel")
@@ -85,7 +92,7 @@ local userConfig = (type(getgenv) == "function" and getgenv().DumperConfig) or {
 local CONFIG = {
     CellSize = userConfig.CellSize or 140,              -- 140 studs horizontal
     CellSizeY = userConfig.CellSizeY or 60,             -- 60 studs vertical (pisos y montañas)
-    MinWaitPerCell = userConfig.MinWaitPerCell or 0.15, -- 150ms inicial para absorber latencia
+    MinWaitPerCell = userConfig.MinWaitPerCell or 0.18, -- 180ms inicial para absorber latencia
     QuiescenceTimeout = userConfig.QuiescenceTimeout or 0.28, -- 280ms sin nuevas piezas antes de avanzar
     MaxWaitPerCell = userConfig.MaxWaitPerCell or 1.8,  -- Techo estricto de 1.8s (imposible trabarse)
     MaxCells = userConfig.MaxCells or 5000,             -- 5000 sectores para cubrir cualquier mapa
@@ -98,16 +105,18 @@ local CONFIG = {
 local mirrorRoot = Instance.new("Folder")
 mirrorRoot.Name = "__USSI_UniversalMirror"
 
-local mirroredInstances = {}
 local mirrorContainers = {}
 local mirrorSignatures = {}
 local totalMirroredParts = 0
 
 local function getContainerKey(inst)
     if inst:IsA("Model") then
-        local ok, cf = pcall(function() return inst:GetPivot() end)
-        local p = (ok and cf and cf.Position) or Vector3.zero
-        return string.format("M_%s_%.1f_%.1f_%.1f", inst.Name, p.X, p.Y, p.Z)
+        local pp = inst.PrimaryPart
+        if pp then
+            local p = pp.Position
+            return string.format("M_%s_%.1f_%.1f_%.1f", inst.Name, p.X, p.Y, p.Z)
+        end
+        return "M_" .. inst.Name
     else
         return "F_" .. inst.Name
     end
@@ -148,8 +157,6 @@ local function ingestInstance(inst)
         if pChar and (inst == pChar or inst:IsDescendantOf(pChar)) then return end
     end
     if inst:IsA("Terrain") or inst:IsA("Camera") then return end
-
-    if mirroredInstances[inst] then return end
 
     -- Reconstruir la cadena de contenedores ancestros
     local ancestorChain = {}
@@ -200,11 +207,10 @@ local function ingestInstance(inst)
             container.Parent = mirrorParent
             mirrorContainers[mirrorParent][cKey] = container
         end
-        mirroredInstances[inst] = true
         return
     end
 
-    -- Instancia hoja (BasePart u objeto)
+    -- Instancia hoja (BasePart u objeto) deduplicada por posición/firma espacial
     local sig = getPartSignature(inst)
     if not mirrorSignatures[mirrorParent] then
         mirrorSignatures[mirrorParent] = {}
@@ -216,24 +222,21 @@ local function ingestInstance(inst)
         if okClone and clone then
             clone.Parent = mirrorParent
             mirrorSignatures[mirrorParent][sig] = clone
-            mirroredInstances[inst] = true
             totalMirroredParts = totalMirroredParts + 1
 
-            -- Los hijos ya viajan dentro del clon; marcarlos como procesados
-            local okDescs, descs = pcall(function() return inst:GetDescendants() end)
+            -- Asegurar que los hijos viajen con archivable activo
+            local okDescs, descs = pcall(function() return clone:GetDescendants() end)
             if okDescs and descs then
                 for _, d in ipairs(descs) do
-                    mirroredInstances[d] = true
+                    pcall(function() d.Archivable = true end)
                 end
             end
         end
-    else
-        mirroredInstances[inst] = true
     end
 end
 
 -- ====================================================================
--- RASTREADOR ESPACIAL ADAPTATIVO (Surface-Level Guided Sweeper)
+-- RASTREADOR ESPACIAL ADAPTATIVO (Surface & Camera Guided Sweeper)
 -- ====================================================================
 local function cellKey(cx, cy, cz)
     return string.format("%d,%d,%d", cx, cy, cz)
@@ -261,6 +264,26 @@ local function runUniversalDumper()
         end
         return nil
     end
+
+    -- ⚡ Optimización universal para configuraciones de streaming y pools en cliente
+    pcall(function()
+        local repStorage = game:GetService("ReplicatedStorage")
+        local utilities = repStorage:FindFirstChild("Utilities")
+        if utilities then
+            local kr = utilities:FindFirstChild("KeycapsRendering")
+            if kr then
+                local cfgMod = kr:FindFirstChild("KeycapStreamConfig")
+                if cfgMod then
+                    local ok, cfg = pcall(require, cfgMod)
+                    if ok and cfg then
+                        cfg.ParentBatchSize = 500
+                        cfg.LoadFrameBudgetSec = 0.05
+                        cfg.MaxInstancesPerChar = 100000
+                    end
+                end
+            end
+        end
+    end)
 
     setHUD("Escaneando geometria inicial...", false)
 
@@ -295,7 +318,7 @@ local function runUniversalDumper()
             local rayParams = RaycastParams.new()
             rayParams.FilterType = Enum.RaycastFilterType.Exclude
             local c = lp.Character
-            if c then rayParams.FilterDescendantsInstances = { c } end
+            if c then rayParams.FilterDescendantsInstances = { c, mirrorRoot } end
             
             -- Detectar superficie real hacia abajo hasta 250 studs para encontrar piso, terreno o plataformas
             local hit = Workspace:Raycast(rawPos + Vector3.new(0, 5, 0), Vector3.new(0, -250, 0), rayParams)
@@ -356,11 +379,16 @@ local function runUniversalDumper()
 
                 local targetPos = getSurfacePos(target.pos)
 
+                -- Teletransportar Personaje Y Cámara (activa LOD y streaming basados en cámara)
                 pcall(function()
                     local curRoot = getActiveHRP()
                     if curRoot then
                         curRoot.CFrame = CFrame.new(targetPos)
                         curRoot.Anchored = true
+                    end
+                    local cam = Workspace.CurrentCamera
+                    if cam then
+                        cam.CFrame = CFrame.new(targetPos + Vector3.new(0, 8, 0))
                     end
                 end)
 
@@ -378,6 +406,28 @@ local function runUniversalDumper()
                 while (os.clock() - lastStreamedTime < CONFIG.QuiescenceTimeout) and (os.clock() - dwellStart < CONFIG.MaxWaitPerCell) do
                     task.wait(0.04)
                 end
+
+                -- 🔍 Barrido espacial 3D local nativo: captura cualquier pieza movida o cargada por pools
+                pcall(function()
+                    local overlap = OverlapParams.new()
+                    overlap.FilterType = Enum.RaycastFilterType.Exclude
+                    local c = lp.Character
+                    if c then overlap.FilterDescendantsInstances = { c, mirrorRoot } end
+
+                    local nearbyParts = Workspace:GetPartBoundsInBox(
+                        CFrame.new(targetPos),
+                        Vector3.new(CONFIG.CellSize * 1.5, 300, CONFIG.CellSize * 1.5),
+                        overlap
+                    )
+                    if nearbyParts then
+                        for _, p in ipairs(nearbyParts) do
+                            ingestInstance(p)
+                            if p:IsA("BasePart") and not p:IsA("Terrain") then
+                                queueCellIfGeometry(p.Position)
+                            end
+                        end
+                    end
+                end)
 
                 if (os.clock() - lastLog > 1.5) or #queue == 0 then
                     lastLog = os.clock()
@@ -398,6 +448,80 @@ local function runUniversalDumper()
         end)
         setHUD(string.format("Barrido completado: %d piezas capturadas", totalMirroredParts), false)
     end
+
+    -- ================================================================
+    -- MATERIALIZADOR MAESTRO DE POOLS EN MEMORIA (Zero-Loss Keycaps & Obbies)
+    -- ================================================================
+    pcall(function()
+        setHUD("Sincronizando registros completos del pool de renderizado...", false)
+        local repStorage = game:GetService("ReplicatedStorage")
+        local utilities = repStorage:FindFirstChild("Utilities")
+        if utilities then
+            local kr = utilities:FindFirstChild("KeycapsRendering")
+            if kr then
+                local debugStateMod = kr:FindFirstChild("KeycapRenderDebugState")
+                if debugStateMod then
+                    local ok, debugState = pcall(require, debugStateMod)
+                    if ok and debugState and debugState.renderer then
+                        local renderer = debugState.renderer
+                        local byId = renderer._byId
+                        local template = renderer._template
+                        local appearances = renderer._surfaceAppearances
+                        local keycapsFolder = renderer._folder or Workspace:FindFirstChild("Keycaps")
+
+                        if byId and template and keycapsFolder then
+                            local createdCount = 0
+                            local yieldStep = 0
+                            for id, record in pairs(byId) do
+                                yieldStep = yieldStep + 1
+                                if yieldStep % 150 == 0 then
+                                    task.wait()
+                                end
+
+                                local pos = record.Position
+                                local char = record.Char
+                                local sig = string.format("P_Keycap_%.2f_%.2f_%.2f_%.2f_%.2f_%.2f_MeshPart",
+                                    pos.X, pos.Y, pos.Z, record.Size.X, record.Size.Y, record.Size.Z)
+
+                                if not mirrorSignatures[keycapsFolder] or not mirrorSignatures[keycapsFolder][sig] then
+                                    local kc = template:Clone()
+                                    kc.Name = "Keycap"
+                                    kc.Color = record.Color
+                                    kc.Size = record.Size
+                                    kc.CFrame = record.Rotation + pos
+                                    kc.Anchored = true
+                                    kc.CanCollide = true
+
+                                    if appearances and char then
+                                        local sa = appearances:FindFirstChild(char)
+                                        if sa then
+                                            local saClone = sa:Clone()
+                                            saClone.Parent = kc
+                                        end
+                                    end
+
+                                    if record.MusicType then
+                                        kc:SetAttribute("MusicType", record.MusicType)
+                                    end
+                                    if record.KeyType then
+                                        kc:SetAttribute("Type", record.KeyType)
+                                    end
+
+                                    kc.Parent = keycapsFolder
+                                    if not mirrorSignatures[keycapsFolder] then
+                                        mirrorSignatures[keycapsFolder] = {}
+                                    end
+                                    mirrorSignatures[keycapsFolder][sig] = kc
+                                    createdCount = createdCount + 1
+                                end
+                            end
+                            setHUD(string.format("Pool sincronizado: %d keycaps completados al 100%%", createdCount), false)
+                        end
+                    end
+                end
+            end
+        end
+    end)
 
     -- ================================================================
     -- FUSIÓN ROBUSTA BASADA EN PIVOTS (Sin colapso de modelos)
