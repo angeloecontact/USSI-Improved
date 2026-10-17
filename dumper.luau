@@ -156,7 +156,7 @@ local function ingestInstance(inst)
         local pChar = p.Character
         if pChar and (inst == pChar or inst:IsDescendantOf(pChar)) then return end
     end
-    if inst:IsA("Terrain") or inst:IsA("Camera") then return end
+    if inst:IsA("Terrain") or inst:IsA("Camera") or inst:IsA("Animator") or inst:IsA("Player") then return end
 
     -- Reconstruir la cadena de contenedores ancestros
     local ancestorChain = {}
@@ -220,16 +220,20 @@ local function ingestInstance(inst)
         makeArchivable(inst)
         local okClone, clone = pcall(function() return inst:Clone() end)
         if okClone and clone then
-            clone.Parent = mirrorParent
-            mirrorSignatures[mirrorParent][sig] = clone
-            totalMirroredParts = totalMirroredParts + 1
+            local okParent = pcall(function() clone.Parent = mirrorParent end)
+            if okParent then
+                mirrorSignatures[mirrorParent][sig] = clone
+                totalMirroredParts = totalMirroredParts + 1
 
-            -- Asegurar que los hijos viajen con archivable activo
-            local okDescs, descs = pcall(function() return clone:GetDescendants() end)
-            if okDescs and descs then
-                for _, d in ipairs(descs) do
-                    pcall(function() d.Archivable = true end)
+                -- Asegurar que los hijos viajen con archivable activo
+                local okDescs, descs = pcall(function() return clone:GetDescendants() end)
+                if okDescs and descs then
+                    for _, d in ipairs(descs) do
+                        pcall(function() d.Archivable = true end)
+                    end
                 end
+            else
+                pcall(function() clone:Destroy() end)
             end
         end
     end
@@ -287,9 +291,9 @@ local function runUniversalDumper()
 
     setHUD("Escaneando geometria inicial...", false)
 
-    -- Ingesta inicial
+    -- Ingesta inicial protegida
     for _, desc in ipairs(Workspace:GetDescendants()) do
-        ingestInstance(desc)
+        pcall(ingestInstance, desc)
     end
     setHUD(string.format("Inicial: %d piezas aseguradas", totalMirroredParts), false)
 
@@ -348,7 +352,7 @@ local function runUniversalDumper()
 
         local descendantConn = Workspace.DescendantAdded:Connect(function(desc)
             lastStreamedTime = os.clock()
-            ingestInstance(desc)
+            pcall(ingestInstance, desc)
             if desc:IsA("BasePart") and not desc:IsA("Terrain") then
                 queueCellIfGeometry(desc.Position)
             end
@@ -553,7 +557,7 @@ local function runUniversalDumper()
                 local cKey = getContainerKey(item)
                 local liveTarget = liveContainers[cKey]
                 if not liveTarget then
-                    item.Parent = workspaceTarget
+                    pcall(function() item.Parent = workspaceTarget end)
                     liveContainers[cKey] = item
                     reinjectedCount = reinjectedCount + 1
                 else
@@ -562,11 +566,15 @@ local function runUniversalDumper()
             else
                 local sig = getPartSignature(item)
                 if not existingParts[sig] then
-                    item.Parent = workspaceTarget
-                    existingParts[sig] = item
-                    reinjectedCount = reinjectedCount + 1
+                    local okP = pcall(function() item.Parent = workspaceTarget end)
+                    if okP then
+                        existingParts[sig] = item
+                        reinjectedCount = reinjectedCount + 1
+                    else
+                        pcall(function() item:Destroy() end)
+                    end
                 else
-                    item:Destroy()
+                    pcall(function() item:Destroy() end)
                 end
             end
         end
