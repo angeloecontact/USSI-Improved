@@ -3681,6 +3681,10 @@ local function synsaveinstance(CustomOptions, CustomOptions2)
 							continue
 						end
 
+						if ClassName == "CharacterMesh" and (PropertyName == "MeshContent" or PropertyName == "OverlayTextureContent" or PropertyName == "BaseTextureContent") then
+							continue
+						end
+
 						local ValueType = Property.ValueType
 
 						if IgnoreSharedStrings and ValueType == "SharedString" then -- ? More info in Options
